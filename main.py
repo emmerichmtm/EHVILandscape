@@ -85,12 +85,19 @@ for i in range(GRID):
             ni, nj = i + di, j + dj
             if 0 <= ni < GRID and 0 <= nj < GRID:
                 neighbors.append(EI_grid[ni, nj])
-        if neighbors:  # should always be true
+        if neighbors:
             if EI_grid[i, j] >= max(neighbors) and any(EI_grid[i, j] > v for v in neighbors):
                 local_mask[i, j] = True
 
+# Sort peaks by EI value (descending)
 local_indices = np.column_stack(np.where(local_mask))
+peak_vals     = np.array([EI_grid[i, j] for i, j in local_indices])
+order         = np.argsort(peak_vals)[::-1]
+local_indices = local_indices[order]
 n_peaks       = len(local_indices)
+
+# Map peak location to rank
+peak_dict = {tuple(coord): idx for idx, coord in enumerate(map(tuple, local_indices))}
 
 # -------------------------------------------------
 # 5.  Greedy ascent basins
@@ -98,47 +105,58 @@ n_peaks       = len(local_indices)
 label_grid = -np.ones_like(EI_grid, dtype=int)
 
 def ascend(i, j):
-    """Greedy ascent to the nearest EI local maximum; handles plateaux safely."""
     while not local_mask[i, j]:
         best_i, best_j, best_val = i, j, EI_grid[i, j]
         for di, dj in neigh:
             ni, nj = i + di, j + dj
             if 0 <= ni < GRID and 0 <= nj < GRID and EI_grid[ni, nj] > best_val:
                 best_i, best_j, best_val = ni, nj, EI_grid[ni, nj]
-        if (best_i, best_j) == (i, j):          # plateau fallback
+        if (best_i, best_j) == (i, j):
             break
         i, j = best_i, best_j
-    if local_mask[i, j]:
-        peak_idx = np.where((local_indices == (i, j)).all(axis=1))[0][0]
-    else:
-        peak_idx = -1
-    return peak_idx
+    return peak_dict.get((i, j), -1)
 
 for i in range(GRID):
     for j in range(GRID):
         label_grid[i, j] = ascend(i, j)
 
 # -------------------------------------------------
-# 6.  Plotting
+# 6.  Pastel colormap helper
 # -------------------------------------------------
-cmap = ListedColormap(plt.cm.tab10.colors * (n_peaks // 10 + 1))
+def pastel_cmap(n):
+    # base HSV hues
+    hues = np.linspace(0, 1, n, endpoint=False)
+    base = plt.cm.hsv(hues)
+    # blend with white to make pastel
+    pastel = 0.6 * base[:, :3] + 0.4  # rgb components
+    pastel = np.hstack([pastel, np.ones((n,1))])  # add alpha
+    return pastel
 
+# Build final ListedColormap
+plot_grid = label_grid + 1  # sentinel -1 -> 0
+pastel_colors = pastel_cmap(n_peaks)
+colors = np.vstack([np.array([1,1,1,0]), pastel_colors])  # prepend transparent
+cmap = ListedColormap(colors)
+
+# -------------------------------------------------
+# 7.  Plotting
+# -------------------------------------------------
 plt.figure(figsize=(6.5, 6))
-plt.imshow(label_grid, origin="lower", extent=[0, 1, 0, 1],
-           cmap=cmap, interpolation="nearest", alpha=0.65)
+plt.imshow(plot_grid, origin="lower", extent=[0, 1, 0, 1],
+           cmap=cmap, interpolation="nearest", alpha=0.9)
 plt.contour(X1, X2, EI_grid, levels=12, colors="k",
-            linewidths=0.4, alpha=0.6)
+            linewidths=0.4, alpha=0.5)
 
-# Mark local maxima
+# Mark peaks
 for idx, (pi, pj) in enumerate(local_indices):
     x_peak, y_peak = X1[pi, pj], X2[pi, pj]
-    plt.scatter(x_peak, y_peak, c="yellow", edgecolor="black",
-                marker="*", s=140, zorder=3)
-    plt.text(x_peak + 0.01, y_peak + 0.01, f"P{idx}", fontsize=6)
+    plt.scatter(x_peak, y_peak, c=[pastel_colors[idx]], edgecolor="black",
+                marker="*", s=150, zorder=3)
+    plt.text(x_peak + 0.01, y_peak + 0.01, f"P{idx}", fontsize=7, weight="bold")
 
-plt.title("Basins of Attraction of EI Peaks (with boundary optima)")
+plt.title("Pastel Basins of Attraction of EI Peaks", fontsize=13)
 plt.xlabel("$x_1$"); plt.ylabel("$x_2$")
 plt.tight_layout()
 plt.show()
 
-print(f"Detected local maxima (including boundaries): {n_peaks}")
+print(f"Detected local maxima (height-ordered): {n_peaks}")
